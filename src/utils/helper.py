@@ -24,8 +24,3 @@ def tick_to_price(TICK_BASE, tick):
 
 def fee_tier_to_tick_spacing(fee_tier):
     return {100: 1, 500: 10, 3000: 60, 10000: 200}.get(fee_tier, 60)
-
-
-def fetch_all_data(API_KEY, query, variables, data_key, first_n, batch_size):
-    # Implement the logic to fetch data from the API
-    pass

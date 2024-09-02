@@ -1,23 +1,7 @@
 import requests
-from typing import Dict, Any
-from ..utils.helper import fee_tier_to_tick_spacing, fetch_all_data
-
-POOL_QUERY = """query get_pools($pool_id: ID!) {
-  pools(where: {id: $pool_id}) {
-    tick
-    sqrtPrice
-    liquidity
-    feeTier
-    token0 {
-      symbol
-      decimals
-    }
-    token1 {
-      symbol
-      decimals
-    }
-  }
-}"""
+from typing import Dict, Any, List
+from ..utils.helper import fee_tier_to_tick_spacing
+from .queries.sub_graph import POOL_QUERY, TOP_POOLS_QUERY
 
 
 def fetch_oku_liquidity(
@@ -94,3 +78,21 @@ def fetch_pool_data(pool_address, API_KEY):
     fee_tier = int(pool["feeTier"])
 
     return sqrt_price, tick_spacing, token0, token1, decimals0, decimals1, fee_tier
+
+
+def fetch_top_pools(api_key: str, num_pools: int = 10) -> List[Dict[str, Any]]:
+    variables = {"first": num_pools}
+    pools = fetch_data_subgraph(
+        api_key, TOP_POOLS_QUERY, variables, data_key="pools", first_n=num_pools, batch_size=100
+    )
+
+    return [
+        {
+            "id": pool["id"],
+            "token0": pool["token0"]["symbol"],
+            "token1": pool["token1"]["symbol"],
+            "fee_tier": int(pool["feeTier"]),
+            "tvl_usd": float(pool["totalValueLockedUSD"]),
+        }
+        for pool in pools
+    ]

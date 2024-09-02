@@ -30,6 +30,7 @@ Thumbs.db
 # Data files
 data/raw/*
 data/processed/*
+data/*
 
 # Results
 results/*

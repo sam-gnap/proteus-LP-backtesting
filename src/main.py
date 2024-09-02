@@ -11,15 +11,12 @@ def main():
     POOL_ADDRESS = "0x8ad599c3a0ff1de082011efddc58f1908eb6e6d8"
     BLOCK_NUMBER = 20656195
 
-    # Fetch pool data
     sqrt_price, tick_spacing, token0, token1, decimals0, decimals1, fee_tier = fetch_pool_data(
         POOL_ADDRESS, API_KEY
     )
 
-    # Fetch liquidity data
     data = fetch_oku_liquidity(pool_address=POOL_ADDRESS, block_number=BLOCK_NUMBER)
 
-    # Process data
     current_price = sqrtPriceX96_to_price(
         int(data["sqrt_price_x96"]), data["token0_decimals"], data["token1_decimals"]
     )
