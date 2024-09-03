@@ -17,7 +17,7 @@ class Pool:
         return price / Decimal(10 ** (self.decimals1 - self.decimals0))
 
     def should_invert_price(self, current_price: Decimal) -> bool:
-        stablecoins = ["USDC", "DAI", "USDT", "TUSD", "LUSD", "BUSD", "GUSD", "UST"]
-        if self.token0 in stablecoins and self.token1 not in stablecoins:
+        self.stablecoins = ["USDC", "DAI", "USDT", "TUSD", "LUSD", "BUSD", "GUSD", "UST"]
+        if self.token0 in self.stablecoins and self.token1 not in self.stablecoins:
             return True
         return current_price < Decimal("1.0")
