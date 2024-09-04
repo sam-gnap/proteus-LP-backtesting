@@ -16,7 +16,7 @@ def main():
     )
 
     # Collect and sample blocks
-    collector.collect_and_sample_blocks_bars(method="dollar", threshold=100000)
+    collector.collect_and_sample_blocks_bars(method="dollar", threshold=1000000)
 
     # Load all sampled blocks
     sampled_blocks = collector.load_sampled_blocks_adaptive()

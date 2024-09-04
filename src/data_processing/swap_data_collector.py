@@ -3,7 +3,7 @@ from datetime import date, timedelta
 from google.cloud import bigquery
 import pandas as pd
 from decimal import Decimal
-from typing import List, Dict
+from typing import List, Dict, Union
 from src.data_processing.queries.big_query import build_query
 from src.data_processing.abis.uniswap_v3_abis import SWAP_V3_JS_CODE
 from src.utils.helper import sqrtPriceX96_to_price
@@ -131,63 +131,6 @@ class SwapDataCollector:
         else:
             return abs(row["real_amount1"]) * row["final_price"]
 
-    def sample_blocks_adaptive(self, df: pd.DataFrame, threshold: float) -> List[int]:
-        df = df.sort_values("block_timestamp")
-
-        if self.pool.token0 in self.pool.stablecoins or self.pool.token1 in self.pool.stablecoins:
-            df["cumulative_value"] = df["dollar_value"].cumsum()
-        else:
-            df["cumulative_value"] = (df["amount0"].abs() + df["amount1"].abs()).cumsum()
-
-        sampled_blocks = []
-        last_bar_end = 0
-
-        for _, row in df.iterrows():
-            if row["cumulative_value"] - last_bar_end >= threshold:
-                sampled_blocks.append(row["block_number"])
-                last_bar_end = row["cumulative_value"]
-
-        return sampled_blocks
-
-    def sample_blocks_volume_bars(
-        self, df: pd.DataFrame, threshold_volume: float
-    ) -> List[Dict[str, int]]:
-        df = df.sort_values("block_timestamp")
-        df["cumulative_volume"] = (df["amount0"].abs() + df["amount1"].abs()).cumsum()
-
-        sampled_blocks = []
-        last_bar_end = 0
-
-        for _, row in df.iterrows():
-            if row["cumulative_volume"] - last_bar_end >= threshold_volume:
-                sampled_blocks.append(
-                    {
-                        "block_number": int(row["block_number"]),
-                        "block_timestamp": int(row["block_timestamp"]),
-                    }
-                )
-
-        return sampled_blocks
-
-    def sample_blocks_dollar_bars(
-        self, df: pd.DataFrame, threshold_dollars: float
-    ) -> List[Dict[str, int]]:
-        df = df.sort_values("block_timestamp")
-        df["cumulative_dollar_volume"] = df["dollar_value"].cumsum()
-
-        sampled_blocks = []
-        last_bar_end = 0
-
-        for _, row in df.iterrows():
-            if row["cumulative_dollar_volume"] - last_bar_end >= threshold_dollars:
-                sampled_blocks.append(
-                    {
-                        "block_number": int(row["block_number"]),
-                        "block_timestamp": int(row["block_timestamp"].timestamp()),
-                    }
-                )
-        return sampled_blocks
-
     def collect_and_sample_blocks_bars(
         self,
         time_step: int = 10,
@@ -196,7 +139,6 @@ class SwapDataCollector:
         threshold: float = 1000000,
     ):
         self.collect_and_store_swap_data(time_step, block_interval)
-
         all_swaps = self.load_swap_data()
 
         if not all_swaps.empty:
@@ -209,13 +151,57 @@ class SwapDataCollector:
             else:
                 raise ValueError("Invalid method. Choose 'volume' or 'dollar'.")
 
-            sampled_filename = os.path.join(self.blocks_dir, f"{method}_bar_sampled_blocks.txt")
+            sampled_filename = self.blocks_dir / f"{method}_bar_sampled_blocks.json"
             with open(sampled_filename, "w") as f:
-                for block in sampled_blocks:
-                    f.write(f"{block}\n")
-            print(f"{method.capitalize()} bar sampled block numbers saved to {sampled_filename}")
+                json.dump(sampled_blocks, f, indent=2)
+
+            print(f"{method.capitalize()} bar sampled block data saved to {sampled_filename}")
         else:
             print("No swap data available for sampling.")
+
+    def sample_blocks_volume_bars(
+        self, df: pd.DataFrame, threshold_volume: float
+    ) -> List[Dict[str, Union[int, float]]]:
+        df = df.sort_values("block_timestamp")
+        df["cumulative_volume"] = (df["amount0"].abs() + df["amount1"].abs()).cumsum()
+
+        sampled_blocks = []
+        last_bar_end = 0
+
+        for _, row in df.iterrows():
+            if row["cumulative_volume"] - last_bar_end >= threshold_volume:
+                sampled_blocks.append(
+                    {
+                        "block_number": int(row["block_number"]),
+                        "block_timestamp": int(row["block_timestamp"].timestamp()),
+                        "cumulative_volume": float(row["cumulative_volume"]),
+                    }
+                )
+                last_bar_end = row["cumulative_volume"]
+
+        return sampled_blocks
+
+    def sample_blocks_dollar_bars(
+        self, df: pd.DataFrame, threshold_dollars: float
+    ) -> List[Dict[str, Union[int, float]]]:
+        df = df.sort_values("block_timestamp")
+        df["cumulative_dollar_volume"] = df["dollar_value"].cumsum()
+
+        sampled_blocks = []
+        last_bar_end = 0
+
+        for _, row in df.iterrows():
+            if row["cumulative_dollar_volume"] - last_bar_end >= threshold_dollars:
+                sampled_blocks.append(
+                    {
+                        "block_number": int(row["block_number"]),
+                        "block_timestamp": int(row["block_timestamp"].timestamp()),
+                        "cumulative_dollar_volume": float(row["cumulative_dollar_volume"]),
+                    }
+                )
+                last_bar_end = row["cumulative_dollar_volume"]
+
+        return sampled_blocks
 
     def load_sampled_blocks_bars(self, method: str = "dollar") -> List[Dict[str, int]]:
         filename = self.blocks_dir / f"{method}_bar_sampled_blocks.json"
