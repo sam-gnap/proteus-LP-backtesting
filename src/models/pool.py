@@ -2,13 +2,23 @@ from decimal import Decimal
 
 
 class Pool:
-    def __init__(self, token0: str, token1: str, decimals0: int, decimals1: int, tick_spacing: int):
+    def __init__(
+        self,
+        token0: str,
+        token1: str,
+        decimals0: int,
+        decimals1: int,
+        tick_spacing: int,
+        # sqrt_price_x96: int,
+    ):
         self.token0 = token0
         self.token1 = token1
         self.decimals0 = decimals0
         self.decimals1 = decimals1
         self.tick_spacing = tick_spacing
         self.TICK_BASE = Decimal("1.0001")
+        # self.sqrt_price_x96 = sqrt_price_x96
+        # self.sqrt_price, self.price = self.sqrtPriceX96_to_price()
 
     def tick_to_price(self, tick: int) -> Decimal:
         return self.TICK_BASE**tick
@@ -21,3 +31,9 @@ class Pool:
         if self.token0 in self.stablecoins and self.token1 not in self.stablecoins:
             return True
         return current_price < Decimal("1.0")
+
+    # def sqrtPriceX96_to_price(self):
+    #     sqrt_price = Decimal(self.sqrt_price_x96) / Decimal(2**96)
+    #     price = sqrt_price**2
+    #     price = price * Decimal(10 ** (self.decimals0 - self.decimals1))
+    #     return sqrt_price, price
