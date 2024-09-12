@@ -17,7 +17,7 @@ class Pool:
         self.token1 = token1
         self.decimals0 = int(decimals0)
         self.decimals1 = int(decimals1)
-        self.fee_tier = fee_tier
+        self.fee_tier = int(fee_tier)
         self.tick_spacing = self.fee_tier_to_tick_spacing()
         self.TICK_BASE = Decimal("1.0001")
         self.sqrt_price_x96 = sqrt_price_x96
