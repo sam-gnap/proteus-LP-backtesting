@@ -16,24 +16,22 @@ import logging
 class LiquidityAnalyzer:
     def __init__(
         self,
-        pool_address: str,
-        token0: str,
-        token1: str,
-        decimals0: int,
-        decimals1: int,
-        sqrt_price_x96: int,
-        tick_spacing: int,
+        pool: Pool,
         start_date: date,
         end_date: date,
     ):
-
-        self.pool_address = pool_address
-        self.pool = Pool(token0, token1, decimals0, decimals1, tick_spacing)
+        self.pool = pool
         self.start_date = start_date
         self.end_date = end_date
 
         self.project_root = Path(__file__).resolve().parents[2]
-        self.base_dir = self.project_root / "data" / "uniswap" / f"{token0}-{token1}"
+        self.base_dir = (
+            self.project_root
+            / "data"
+            / "uniswap"
+            / f"{self.pool.token0}-{self.pool.token1}"
+            / f"fee_{self.pool.fee_tier}"
+        )
         self.liquidity_dir = self.base_dir / "liquidity"
         self.blocks_dir = self.base_dir / "blocks"
         # Create directories if they don't exist
@@ -46,17 +44,12 @@ class LiquidityAnalyzer:
         )
         self.logger = logging.getLogger(__name__)
         self.sampled_blocks = self.load_sampled_blocks()
-        self.liquidity_changes = self.get_liquidity_changes()
+        self.liquidity_changes = self.fetch_liquidity()
 
     def load_sampled_blocks(self) -> pd.DataFrame:
         collector = SwapDataCollector(
             project_id="uniswap-v3-analytics",
-            pool_address=self.pool_address,
-            token0=self.pool.token0,
-            token1=self.pool.token1,
-            decimals0=self.pool.decimals0,
-            decimals1=self.pool.decimals1,
-            tick_spacing=self.pool.tick_spacing,
+            pool=self.pool,
             start_date=self.start_date,
             end_date=self.end_date,
         )
@@ -94,16 +87,6 @@ class LiquidityAnalyzer:
 
         return df
 
-    def get_liquidity_changes(self) -> pd.DataFrame:
-        self.fetch_and_store_liquidity(self.start_date, self.end_date)
-
-        df = pd.DataFrame()
-        for block in self.sampled_blocks.block_number:
-            df_liquidity_block = self.load_liquidity_distribution(block)
-            df = pd.concat([df, df_liquidity_block])
-
-        return df
-
     def save_liquidity_distribution(self, block_number: int, distribution: pd.DataFrame):
         filename = self.liquidity_dir / f"liquidity_distribution_{block_number}.parquet"
 
@@ -126,21 +109,21 @@ class LiquidityAnalyzer:
         else:
             raise FileNotFoundError(f"Liquidity distribution for block {block_number} not found.")
 
-    def fetch_and_store_liquidity(self, start_date: date, end_date: date):
+    def fetch_liquidity(self):
+        self.df_liquidity = pd.DataFrame()
         for block in self.sampled_blocks.block_number:
             if not (self.liquidity_dir / f"liquidity_distribution_{block}.parquet").exists():
-                df, _, _ = self.get_liquidity_distribution(block)
-                self.save_liquidity_distribution(block, df)
-
+                df_liquidity_block, _, _ = self.get_liquidity_distribution(block)
             else:
-                print(f"Liquidity distribution for block {block} already exists. Skipping.")
-
+                df_liquidity_block = self.load_liquidity_distribution(block)
+            print(f"Loading liquidity for block number {block}")
+            self.df_liquidity = pd.concat([self.df_liquidity, df_liquidity_block])
         self.logger.info("Finished fetching and storing liquidity data")
 
     def get_liquidity_distribution(
         self, block_number: int
     ) -> Tuple[pd.DataFrame, Decimal, Decimal]:
-        data = fetch_oku_liquidity(pool_address=self.pool_address, block_number=block_number)
+        data = fetch_oku_liquidity(pool_address=self.pool.pool_address, block_number=block_number)
         tick_mapping = organize_tick_data(tick_data=data["ticks"])
         current_tick = int(data["current_pool_tick"])
         self.distribution = LiquidityDistribution(

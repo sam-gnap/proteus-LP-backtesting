@@ -19,25 +19,24 @@ class SwapDataCollector:
     def __init__(
         self,
         project_id: str,
-        pool_address: str,
-        token0: str,
-        token1: str,
-        decimals0: int,
-        decimals1: int,
-        tick_spacing: int,
+        pool: Pool,
         start_date: date,
         end_date: date,
     ):
         self.project_id = project_id
-        self.pool_address = pool_address
-        self.pool = Pool(token0, token1, decimals0, decimals1, tick_spacing)
+        self.pool = pool
+        self.pool_address = self.pool.pool_address
         self.start_date = start_date
         self.end_date = end_date
         self.client = bigquery.Client(project=project_id)
-
         self.project_root = Path(__file__).resolve().parents[2]
-
-        self.base_dir = self.project_root / "data" / "uniswap" / f"{token0}-{token1}"
+        self.base_dir = (
+            self.project_root
+            / "data"
+            / "uniswap"
+            / f"{self.pool.token0}-{self.pool.token1}"
+            / f"fee_{self.pool.fee_tier}"
+        )
         self.swaps_dir = self.base_dir / "swaps"
         self.blocks_dir = self.base_dir / "blocks"
 
