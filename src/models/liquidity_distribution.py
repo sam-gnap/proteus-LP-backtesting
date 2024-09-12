@@ -45,8 +45,8 @@ class LiquidityAnalyzer:
             format="%(asctime)s - %(levelname)s - %(message)s",
         )
         self.logger = logging.getLogger(__name__)
-
         self.sampled_blocks = self.load_sampled_blocks()
+        self.liquidity_changes = self.get_liquidity_changes()
 
     def load_sampled_blocks(self) -> pd.DataFrame:
         collector = SwapDataCollector(
@@ -94,32 +94,28 @@ class LiquidityAnalyzer:
 
         return df
 
-    def analyze_liquidity(self, block_number: int) -> Tuple[pd.DataFrame, Decimal, Decimal]:
-        data = fetch_oku_liquidity(pool_address=self.pool_address, block_number=block_number)
-        tick_mapping = organize_tick_data(tick_data=data["ticks"])
-        current_tick = int(data["current_pool_tick"])
-        self.distribution = LiquidityDistribution(self.pool, tick_mapping, current_tick)
-        result, total_amount0, total_amount1 = self.distribution.get_distribution()
+    def get_liquidity_changes(self) -> pd.DataFrame:
+        self.fetch_and_store_liquidity(self.start_date, self.end_date)
 
-        # Convert result to DataFrame and save
-        df = pd.DataFrame([r._asdict() for r in result])
-        self.save_liquidity_distribution(block_number, df)
+        df = pd.DataFrame()
+        for block in self.sampled_blocks.block_number:
+            df_liquidity_block = self.load_liquidity_distribution(block)
+            df = pd.concat([df, df_liquidity_block])
 
-        return df, total_amount0, total_amount1
+        return df
 
     def save_liquidity_distribution(self, block_number: int, distribution: pd.DataFrame):
         filename = self.liquidity_dir / f"liquidity_distribution_{block_number}.parquet"
 
-        # Convert Decimal columns to float with limited precision
         for column in distribution.select_dtypes(include=[Decimal]).columns:
             distribution[column] = distribution[column].astype(float).round(10)
 
-        # Convert int64 to int32 if necessary
         for column in distribution.select_dtypes(include=["int64"]).columns:
             distribution[column] = distribution[column].astype("int32")
 
         try:
             distribution.to_parquet(filename, compression="snappy")
+            self.logger.info(f"Liquidity distribution for block {block_number} saved successfully")
         except Exception as e:
             print(f"Error saving liquidity distribution for block {block_number}: {str(e)}")
 
@@ -131,66 +127,36 @@ class LiquidityAnalyzer:
             raise FileNotFoundError(f"Liquidity distribution for block {block_number} not found.")
 
     def fetch_and_store_liquidity(self, start_date: date, end_date: date):
-        blocks = self.select_blocks_by_date_range(start_date, end_date)
-        for block in blocks:
+        for block in self.sampled_blocks.block_number:
             if not (self.liquidity_dir / f"liquidity_distribution_{block}.parquet").exists():
-                self.analyze_liquidity(block)
+                df, _, _ = self.get_liquidity_distribution(block)
+                self.save_liquidity_distribution(block, df)
+
             else:
                 print(f"Liquidity distribution for block {block} already exists. Skipping.")
 
         self.logger.info("Finished fetching and storing liquidity data")
 
-    def analyze_liquidity_changes(self, start_date: date, end_date: date) -> pd.DataFrame:
-        blocks = self.select_blocks_by_date_range(start_date, end_date)
+    def get_liquidity_distribution(
+        self, block_number: int
+    ) -> Tuple[pd.DataFrame, Decimal, Decimal]:
+        data = fetch_oku_liquidity(pool_address=self.pool_address, block_number=block_number)
+        tick_mapping = organize_tick_data(tick_data=data["ticks"])
+        current_tick = int(data["current_pool_tick"])
+        self.distribution = LiquidityDistribution(
+            self.pool, tick_mapping, current_tick, block_number
+        )
+        result, _, _ = self.distribution.get_distribution()
+        df = pd.DataFrame([r._asdict() for r in result])
+        self.save_liquidity_distribution(block_number, df)
 
-        # First, ensure all required liquidity data is fetched and stored
-        self.fetch_and_store_liquidity(start_date, end_date)
-
-        liquidity_data = []
-        for block in blocks:
-            df, total_amount0, total_amount1 = self.analyze_liquidity(block)
-
-        return pd.DataFrame(liquidity_data)
-
-    def plot_liquidity_over_time(self, start: date, end: date, num_samples: int = 5):
-        blocks = self.select_blocks_by_date_range(start, end)
-        sampled_blocks = blocks[:num_samples]  # Take first num_samples blocks for simplicity
-
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 16))
-
-        for block in sampled_blocks:
-            result, _, _ = self.analyze_liquidity(block)
-            timestamp = self.sampled_blocks.loc[
-                self.sampled_blocks["block_number"] == block, "datetime"
-            ].iloc[0]
-
-            ticks = [info.tick for info in result]
-            liquidities = [info.liquidity for info in result]
-
-            ax1.plot(ticks, liquidities, label=f"Block {block} ({timestamp:%Y-%m-%d %H:%M})")
-            ax2.plot(
-                [info.price for info in result],
-                liquidities,
-                label=f"Block {block} ({timestamp:%Y-%m-%d %H:%M})",
-            )
-
-        ax1.set_xlabel("Tick")
-        ax1.set_ylabel("Liquidity")
-        ax1.set_title("Liquidity Distribution over Ticks")
-        ax1.legend()
-
-        ax2.set_xlabel("Price")
-        ax2.set_ylabel("Liquidity")
-        ax2.set_title(f"Liquidity Distribution over Price ({self.pool.token1}/{self.pool.token0})")
-        ax2.set_xscale("log")
-        ax2.legend()
-
-        plt.tight_layout()
-        plt.show()
+        return df, _, _
 
 
 class TickInfo(NamedTuple):
+    block: int
     tick: int
+    active_tick: int
     liquidity: int
     price: Decimal
     amount0: Decimal
@@ -200,8 +166,9 @@ class TickInfo(NamedTuple):
 
 
 class LiquidityDistribution:
-    def __init__(self, pool: Pool, tick_mapping: Dict[int, int], current_tick: int):
+    def __init__(self, pool: Pool, tick_mapping: Dict[int, int], current_tick: int, block: int):
         self.pool = pool
+        self.block = block
         self.tick_mapping = tick_mapping
         self.current_tick = current_tick
         self.current_sqrt_price = self.pool.tick_to_price(current_tick // 2)
@@ -251,7 +218,17 @@ class LiquidityDistribution:
             price = Decimal("1") / price
 
         return (
-            TickInfo(tick, liquidity, price, amount0, amount1, adjusted_amount0, adjusted_amount1),
+            TickInfo(
+                self.block,
+                self.current_tick,
+                tick,
+                liquidity,
+                price,
+                amount0,
+                amount1,
+                adjusted_amount0,
+                adjusted_amount1,
+            ),
             total_amount0,
             total_amount1,
         )
