@@ -15,15 +15,12 @@ import logging
 
 class LiquidityAnalyzer:
     def __init__(
-        self,
-        pool: Pool,
-        start_date: date,
-        end_date: date,
+        self, pool: Pool, start_date: date, end_date: date, threshold_dollar_volume_swaps: int
     ):
         self.pool = pool
         self.start_date = start_date
         self.end_date = end_date
-
+        self.threshold = threshold_dollar_volume_swaps
         self.project_root = Path(__file__).resolve().parents[2]
         self.base_dir = (
             self.project_root
@@ -54,11 +51,17 @@ class LiquidityAnalyzer:
             end_date=self.end_date,
         )
 
-        # Check if we have existing data
+        # Load existing data
         existing_data = collector.load_sampled_blocks_bars(method="dollar")
 
         if existing_data:
-            df = pd.DataFrame(existing_data)
+            # Convert the dictionary of lists into a list of dictionaries
+            flattened_data = [
+                {**block, "date": date}
+                for date, blocks in existing_data.items()
+                for block in blocks
+            ]
+            df = pd.DataFrame(flattened_data)
             df["datetime"] = pd.to_datetime(df["block_timestamp"], unit="s")
             df = df.sort_values("datetime")
 
@@ -68,20 +71,26 @@ class LiquidityAnalyzer:
                 or df["datetime"].max().date() < self.end_date
             ):
                 self.logger.info("Collecting additional data for new date range")
-                collector.collect_and_sample_blocks_bars(method="dollar", threshold=1000000)
-
+                collector.collect_and_sample_blocks_bars(method="dollar", threshold=self.threshold)
                 # Reload the data after collection
                 updated_data = collector.load_sampled_blocks_bars(method="dollar")
-                df = pd.DataFrame(updated_data)
+                flattened_updated_data = [
+                    {**block, "date": date}
+                    for date, blocks in updated_data.items()
+                    for block in blocks
+                ]
+                df = pd.DataFrame(flattened_updated_data)
                 df["datetime"] = pd.to_datetime(df["block_timestamp"], unit="s")
                 df = df.sort_values("datetime")
         else:
             self.logger.info("No existing data found. Collecting new data.")
-            collector.collect_and_sample_blocks_bars(method="dollar", threshold=1000000)
-
+            collector.collect_and_sample_blocks_bars(method="dollar", threshold=self.threshold)
             # Load the newly collected data
             new_data = collector.load_sampled_blocks_bars(method="dollar")
-            df = pd.DataFrame(new_data)
+            flattened_new_data = [
+                {**block, "date": date} for date, blocks in new_data.items() for block in blocks
+            ]
+            df = pd.DataFrame(flattened_new_data)
             df["datetime"] = pd.to_datetime(df["block_timestamp"], unit="s")
             df = df.sort_values("datetime")
 
@@ -116,6 +125,9 @@ class LiquidityAnalyzer:
                 df_liquidity_block, _, _ = self.get_liquidity_distribution(block)
             else:
                 df_liquidity_block = self.load_liquidity_distribution(block)
+            df_liquidity_block = df_liquidity_block.loc[
+                (df_liquidity_block["price"] > 1500) & (df_liquidity_block["price"] < 4500)
+            ]
             print(f"Loading liquidity for block number {block}")
             self.df_liquidity = pd.concat([self.df_liquidity, df_liquidity_block])
         self.logger.info("Finished fetching and storing liquidity data")
@@ -131,6 +143,7 @@ class LiquidityAnalyzer:
         )
         result, _, _ = self.distribution.get_distribution()
         df = pd.DataFrame([r._asdict() for r in result])
+        df = df.loc[(df["price"] > 1500) & (df["price"] < 4500)]
         self.save_liquidity_distribution(block_number, df)
 
         return df, _, _
@@ -233,6 +246,81 @@ class LiquidityDistribution:
             total_amount1 += amount1
 
         return distribution, total_amount0, total_amount1
+
+
+class UniswapV3LiquidityCalculator:
+    Q96 = 2**96
+
+    def __init__(self, pool):
+        self.pool = pool
+
+    @staticmethod
+    def get_tick_at_sqrt_ratio(sqrt_ratio):
+        return math.floor(math.log((sqrt_ratio / UniswapV3LiquidityCalculator.Q96) ** 2, 1.0001))
+
+    @staticmethod
+    def get_sqrt_ratio_at_tick(tick):
+        return int((1.0001 ** (tick / 2)) * UniswapV3LiquidityCalculator.Q96)
+
+    @staticmethod
+    def get_liquidity_for_amounts(
+        sqrt_price_x96, sqrt_price_a_x96, sqrt_price_b_x96, amount0, amount1
+    ):
+        if sqrt_price_a_x96 > sqrt_price_b_x96:
+            sqrt_price_a_x96, sqrt_price_b_x96 = sqrt_price_b_x96, sqrt_price_a_x96
+
+        liquidity = 0
+        if sqrt_price_x96 <= sqrt_price_a_x96:
+            liquidity = UniswapV3LiquidityCalculator.get_liquidity_for_amount0(
+                sqrt_price_a_x96, sqrt_price_b_x96, amount0
+            )
+        elif sqrt_price_x96 < sqrt_price_b_x96:
+            liquidity0 = UniswapV3LiquidityCalculator.get_liquidity_for_amount0(
+                sqrt_price_x96, sqrt_price_b_x96, amount0
+            )
+            liquidity1 = UniswapV3LiquidityCalculator.get_liquidity_for_amount1(
+                sqrt_price_a_x96, sqrt_price_x96, amount1
+            )
+            liquidity = min(liquidity0, liquidity1)
+        else:
+            liquidity = UniswapV3LiquidityCalculator.get_liquidity_for_amount1(
+                sqrt_price_a_x96, sqrt_price_b_x96, amount1
+            )
+
+        return liquidity
+
+    @staticmethod
+    def get_liquidity_for_amount0(sqrt_price_a_x96, sqrt_price_b_x96, amount0):
+        intermediate = sqrt_price_a_x96 * sqrt_price_b_x96 // UniswapV3LiquidityCalculator.Q96
+        return (amount0 * intermediate) // (sqrt_price_b_x96 - sqrt_price_a_x96)
+
+    @staticmethod
+    def get_liquidity_for_amount1(sqrt_price_a_x96, sqrt_price_b_x96, amount1):
+        return (amount1 * UniswapV3LiquidityCalculator.Q96) // (sqrt_price_b_x96 - sqrt_price_a_x96)
+
+    def calculate_liquidity_with_tick_spacing(
+        self, amount0, amount1, current_price, lower_price, upper_price
+    ):
+        # Convert prices to ticks
+        current_tick = self.pool.price_to_tick(current_price)
+        lower_tick = self.pool.price_to_tick(lower_price)
+        upper_tick = self.pool.price_to_tick(upper_price)
+
+        # Adjust ticks to be multiples of tick_spacing
+        lower_tick = math.ceil(lower_tick / self.pool.tick_spacing) * self.pool.tick_spacing
+        upper_tick = math.floor(upper_tick / self.pool.tick_spacing) * self.pool.tick_spacing
+
+        # Convert adjusted ticks back to sqrt prices
+        sqrt_price_x96 = self.get_sqrt_ratio_at_tick(current_tick)
+        sqrt_price_a_x96 = self.get_sqrt_ratio_at_tick(lower_tick)
+        sqrt_price_b_x96 = self.get_sqrt_ratio_at_tick(upper_tick)
+
+        # Calculate liquidity
+        liquidity = self.get_liquidity_for_amounts(
+            sqrt_price_x96, sqrt_price_a_x96, sqrt_price_b_x96, amount0, amount1
+        )
+
+        return liquidity
 
 
 # if __name__ == "main":

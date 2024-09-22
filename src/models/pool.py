@@ -1,4 +1,5 @@
 from decimal import Decimal
+import numpy as np
 
 
 class Pool:
@@ -25,6 +26,12 @@ class Pool:
 
     def tick_to_price(self, tick: int) -> Decimal:
         return self.TICK_BASE**tick
+
+    def price_to_tick(self, price: Decimal) -> int:
+        log_price = np.log(np.float64(price))
+        log_tick_base = np.log(np.float64(self.TICK_BASE))
+        tick = log_price / log_tick_base
+        return round(tick)
 
     def adjust_price(self, price: Decimal) -> Decimal:
         return price / Decimal(10 ** (self.decimals1 - self.decimals0))
