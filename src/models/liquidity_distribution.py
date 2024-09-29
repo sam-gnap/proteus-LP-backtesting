@@ -1,5 +1,4 @@
 from typing import Dict, List, Tuple, NamedTuple
-import math
 import pandas as pd
 from datetime import date
 from decimal import Decimal
@@ -11,6 +10,9 @@ from src.utils.helper import organize_tick_data
 from pathlib import Path
 from src.data_processing.swap_data_collector import SwapDataCollector
 import logging
+import numpy as np
+from decimal import Decimal, getcontext
+import math
 
 
 class LiquidityAnalyzer:
@@ -248,97 +250,167 @@ class LiquidityDistribution:
         return distribution, total_amount0, total_amount1
 
 
-class UniswapV3LiquidityCalculator:
+# Set a high precision to handle the large numbers
+getcontext().prec = 80
+
+
+class LiquidityPeriphery:
     Q96 = 2**96
+    MIN_TICK = -887272
+    MAX_TICK = -MIN_TICK
+    MIN_SQRT_RATIO = 4295128739
+    MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342
 
     def __init__(self, pool):
         self.pool = pool
 
-    @staticmethod
-    def get_tick_at_sqrt_ratio(sqrt_ratio):
-        return math.floor(math.log((sqrt_ratio / UniswapV3LiquidityCalculator.Q96) ** 2, 1.0001))
+    def mul_div(self, a, b, denominator):
+        return (a * b) // denominator
 
-    @staticmethod
-    def get_sqrt_ratio_at_tick(tick):
-        return int((1.0001 ** (tick / 2)) * UniswapV3LiquidityCalculator.Q96)
+    def get_sqrt_ratio_at_tick(self, tick):
+        abs_tick = abs(tick)
+        if abs_tick > LiquidityPeriphery.MAX_TICK:
+            raise ValueError("Tick must be between MIN_TICK and MAX_TICK")
 
-    @staticmethod
-    def get_liquidity_for_amounts(
-        sqrt_price_x96, sqrt_price_a_x96, sqrt_price_b_x96, amount0, amount1
-    ):
-        if sqrt_price_a_x96 > sqrt_price_b_x96:
-            sqrt_price_a_x96, sqrt_price_b_x96 = sqrt_price_b_x96, sqrt_price_a_x96
-
-        liquidity = 0
-        if sqrt_price_x96 <= sqrt_price_a_x96:
-            liquidity = UniswapV3LiquidityCalculator.get_liquidity_for_amount0(
-                sqrt_price_a_x96, sqrt_price_b_x96, amount0
-            )
-        elif sqrt_price_x96 < sqrt_price_b_x96:
-            liquidity0 = UniswapV3LiquidityCalculator.get_liquidity_for_amount0(
-                sqrt_price_x96, sqrt_price_b_x96, amount0
-            )
-            liquidity1 = UniswapV3LiquidityCalculator.get_liquidity_for_amount1(
-                sqrt_price_a_x96, sqrt_price_x96, amount1
-            )
-            liquidity = min(liquidity0, liquidity1)
-        else:
-            liquidity = UniswapV3LiquidityCalculator.get_liquidity_for_amount1(
-                sqrt_price_a_x96, sqrt_price_b_x96, amount1
-            )
-
-        return liquidity
-
-    @staticmethod
-    def get_liquidity_for_amount0(sqrt_price_a_x96, sqrt_price_b_x96, amount0):
-        intermediate = sqrt_price_a_x96 * sqrt_price_b_x96 // UniswapV3LiquidityCalculator.Q96
-        return (amount0 * intermediate) // (sqrt_price_b_x96 - sqrt_price_a_x96)
-
-    @staticmethod
-    def get_liquidity_for_amount1(sqrt_price_a_x96, sqrt_price_b_x96, amount1):
-        return (amount1 * UniswapV3LiquidityCalculator.Q96) // (sqrt_price_b_x96 - sqrt_price_a_x96)
-
-    def calculate_liquidity_with_tick_spacing(
-        self, amount0, amount1, current_price, lower_price, upper_price
-    ):
-        # Convert prices to ticks
-        current_tick = self.pool.price_to_tick(current_price)
-        lower_tick = self.pool.price_to_tick(lower_price)
-        upper_tick = self.pool.price_to_tick(upper_price)
-
-        # Adjust ticks to be multiples of tick_spacing
-        lower_tick = math.ceil(lower_tick / self.pool.tick_spacing) * self.pool.tick_spacing
-        upper_tick = math.floor(upper_tick / self.pool.tick_spacing) * self.pool.tick_spacing
-
-        # Convert adjusted ticks back to sqrt prices
-        sqrt_price_x96 = self.get_sqrt_ratio_at_tick(current_tick)
-        sqrt_price_a_x96 = self.get_sqrt_ratio_at_tick(lower_tick)
-        sqrt_price_b_x96 = self.get_sqrt_ratio_at_tick(upper_tick)
-
-        # Calculate liquidity
-        liquidity = self.get_liquidity_for_amounts(
-            sqrt_price_x96, sqrt_price_a_x96, sqrt_price_b_x96, amount0, amount1
+        ratio = (
+            0xFFFCB933BD6FAD37AA2D162D1A594001
+            if abs_tick & 0x1 != 0
+            else 0x100000000000000000000000000000000
         )
 
-        return liquidity
+        if abs_tick & 0x2 != 0:
+            ratio = (ratio * 0xFFF97272373D413259A46990580E213A) >> 128
+        if abs_tick & 0x4 != 0:
+            ratio = (ratio * 0xFFF2E50F5F656932EF12357CF3C7FDCC) >> 128
+        if abs_tick & 0x8 != 0:
+            ratio = (ratio * 0xFFE5CACA7E10E4E61C3624EAA0941CD0) >> 128
+        if abs_tick & 0x10 != 0:
+            ratio = (ratio * 0xFFCB9843D60F6159C9DB58835C926644) >> 128
+        if abs_tick & 0x20 != 0:
+            ratio = (ratio * 0xFF973B41FA98C081472E6896DFB254C0) >> 128
+        if abs_tick & 0x40 != 0:
+            ratio = (ratio * 0xFF2EA16466C96A3843EC78B326B52861) >> 128
+        if abs_tick & 0x80 != 0:
+            ratio = (ratio * 0xFE5DEE046A99A2A811C461F1969C3053) >> 128
+        if abs_tick & 0x100 != 0:
+            ratio = (ratio * 0xFCBE86C7900A88AEDCFFC83B479AA3A4) >> 128
+        if abs_tick & 0x200 != 0:
+            ratio = (ratio * 0xF987A7253AC413176F2B074CF7815E54) >> 128
+        if abs_tick & 0x400 != 0:
+            ratio = (ratio * 0xF3392B0822B70005940C7A398E4B70F3) >> 128
+        if abs_tick & 0x800 != 0:
+            ratio = (ratio * 0xE7159475A2C29B7443B29C7FA6E889D9) >> 128
+        if abs_tick & 0x1000 != 0:
+            ratio = (ratio * 0xD097F3BDFD2022B8845AD8F792AA5825) >> 128
+        if abs_tick & 0x2000 != 0:
+            ratio = (ratio * 0xA9F746462D870FDF8A65DC1F90E061E5) >> 128
+        if abs_tick & 0x4000 != 0:
+            ratio = (ratio * 0x70D869A156D2A1B890BB3DF62BAF32F7) >> 128
+        if abs_tick & 0x8000 != 0:
+            ratio = (ratio * 0x31BE135F97D08FD981231505542FCFA6) >> 128
+        if abs_tick & 0x10000 != 0:
+            ratio = (ratio * 0x9AA508B5B7A84E1C677DE54F3E99BC9) >> 128
+        if abs_tick & 0x20000 != 0:
+            ratio = (ratio * 0x5D6AF8DEDB81196699C329225EE604) >> 128
+        if abs_tick & 0x40000 != 0:
+            ratio = (ratio * 0x2216E584F5FA1EA926041BEDFE98) >> 128
+        if abs_tick & 0x80000 != 0:
+            ratio = (ratio * 0x48A170391F7DC42444E8FA2) >> 128
 
+        if tick > 0:
+            ratio = (2**256 - 1) // ratio
 
-# if __name__ == "main":
-#     POOL_ADDRESS = "0x8ad599c3a0ff1de082011efddc58f1908eb6e6d8"
-#     START_DATE = date(2024, 8, 1)
-#     END_DATE = date(2024, 8, 31)
+        return int((ratio >> 32) + (1 if ratio % (1 << 32) else 0))
 
-#     analyzer = LiquidityAnalyzer(
-#         pool_address=POOL_ADDRESS,
-#         token0="WETH",
-#         token1="USDC",
-#         decimals0=18,
-#         decimals1=6,
-#         tick_spacing=60,
-#         start_date=START_DATE,
-#         end_date=END_DATE,
-#     )
-#     data = fetch_oku_liquidity(pool_address=POOL_ADDRESS, block_number=20530985)
-#     current_tick = int(data["current_pool_tick"])
-#     pool = Pool(token0="WETH", token1="USDC", decimals0=18, decimals1=6, tick_spacing=60)
-#     liq = LiquidityDistribution(pool, data, current_tick)
+    def price_to_tick(self, price: float, token0_decimals: int, token1_decimals: int) -> int:
+        decimals_adjustment = 10 ** (token0_decimals - token1_decimals)
+        price_adjusted = price * decimals_adjustment
+        sqrt_price_x96 = int((math.sqrt(price_adjusted) * (2**96)))
+        return self.get_tick_at_sqrt_ratio(sqrt_price_x96)
+
+    def get_liquidity_for_amounts(
+        self, sqrt_ratio_x96, sqrt_ratio_a_x96, sqrt_ratio_b_x96, amount0, amount1
+    ):
+        if sqrt_ratio_a_x96 > sqrt_ratio_b_x96:
+            sqrt_ratio_a_x96, sqrt_ratio_b_x96 = sqrt_ratio_b_x96, sqrt_ratio_a_x96
+
+        if sqrt_ratio_x96 <= sqrt_ratio_a_x96:
+            liquidity = self.get_liquidity_for_amount0(sqrt_ratio_a_x96, sqrt_ratio_b_x96, amount0)
+        elif sqrt_ratio_x96 < sqrt_ratio_b_x96:
+            liquidity0 = self.get_liquidity_for_amount0(sqrt_ratio_x96, sqrt_ratio_b_x96, amount0)
+            liquidity1 = self.get_liquidity_for_amount1(sqrt_ratio_a_x96, sqrt_ratio_x96, amount1)
+            liquidity = min(liquidity0, liquidity1)
+        else:
+            liquidity = self.get_liquidity_for_amount1(sqrt_ratio_a_x96, sqrt_ratio_b_x96, amount1)
+
+        return sqrt_ratio_x96, sqrt_ratio_a_x96, sqrt_ratio_b_x96, amount0, amount1, liquidity
+
+    def get_liquidity_for_amount0(self, sqrt_ratio_a_x96, sqrt_ratio_b_x96, amount0):
+        if sqrt_ratio_a_x96 > sqrt_ratio_b_x96:
+            sqrt_ratio_a_x96, sqrt_ratio_b_x96 = sqrt_ratio_b_x96, sqrt_ratio_a_x96
+
+        intermediate = self.mul_div(sqrt_ratio_a_x96, sqrt_ratio_b_x96, self.Q96)
+        return self.mul_div(amount0, intermediate, sqrt_ratio_b_x96 - sqrt_ratio_a_x96)
+
+    def get_liquidity_for_amount1(self, sqrt_ratio_a_x96, sqrt_ratio_b_x96, amount1):
+        if sqrt_ratio_a_x96 > sqrt_ratio_b_x96:
+            sqrt_ratio_a_x96, sqrt_ratio_b_x96 = sqrt_ratio_b_x96, sqrt_ratio_a_x96
+
+        return self.mul_div(amount1, self.Q96, sqrt_ratio_b_x96 - sqrt_ratio_a_x96)
+
+    def calculate_liquidity(self, amount0, amount1, lower_tick, upper_tick, current_tick):
+        sqrt_ratio_x96 = self.get_sqrt_ratio_at_tick(current_tick)
+        sqrt_ratio_a_x96 = self.get_sqrt_ratio_at_tick(lower_tick)
+        sqrt_ratio_b_x96 = self.get_sqrt_ratio_at_tick(upper_tick)
+        amount0 = amount0 * (10**self.pool.decimals0)
+        amount1 = amount1 * (10**self.pool.decimals1)
+
+        return self.get_liquidity_for_amounts(
+            sqrt_ratio_x96, sqrt_ratio_a_x96, sqrt_ratio_b_x96, amount0, amount1
+        )
+
+    def get_amounts_for_liquidity(self, current_tick, lower_tick, upper_tick, liquidity):
+        sqrt_ratio_x96 = self.get_sqrt_ratio_at_tick(current_tick)
+        sqrt_ratio_a_x96 = self.get_sqrt_ratio_at_tick(lower_tick)
+        sqrt_ratio_b_x96 = self.get_sqrt_ratio_at_tick(upper_tick)
+        if sqrt_ratio_a_x96 > sqrt_ratio_b_x96:
+            sqrt_ratio_a_x96, sqrt_ratio_b_x96 = sqrt_ratio_b_x96, sqrt_ratio_a_x96
+
+        if sqrt_ratio_x96 <= sqrt_ratio_a_x96:
+            amount0 = self.get_amount0_for_liquidity(sqrt_ratio_a_x96, sqrt_ratio_b_x96, liquidity)
+            amount1 = 0
+        elif sqrt_ratio_x96 < sqrt_ratio_b_x96:
+            amount0 = self.get_amount0_for_liquidity(sqrt_ratio_x96, sqrt_ratio_b_x96, liquidity)
+            amount1 = self.get_amount1_for_liquidity(sqrt_ratio_a_x96, sqrt_ratio_x96, liquidity)
+        else:
+            amount0 = 0
+            amount1 = self.get_amount1_for_liquidity(sqrt_ratio_a_x96, sqrt_ratio_b_x96, liquidity)
+        amount0 = amount0 / (10**self.pool.decimals0)
+        amount1 = amount1 / (10**self.pool.decimals1)
+        return amount0, amount1
+
+    def get_amount0_for_liquidity(self, sqrt_ratio_a_x96, sqrt_ratio_b_x96, liquidity):
+        if sqrt_ratio_a_x96 > sqrt_ratio_b_x96:
+            sqrt_ratio_a_x96, sqrt_ratio_b_x96 = sqrt_ratio_b_x96, sqrt_ratio_a_x96
+
+        return (
+            self.mul_div(liquidity << 96, sqrt_ratio_b_x96 - sqrt_ratio_a_x96, sqrt_ratio_b_x96)
+            // sqrt_ratio_a_x96
+        )
+
+    def get_amount1_for_liquidity(self, sqrt_ratio_a_x96, sqrt_ratio_b_x96, liquidity):
+        if sqrt_ratio_a_x96 > sqrt_ratio_b_x96:
+            sqrt_ratio_a_x96, sqrt_ratio_b_x96 = sqrt_ratio_b_x96, sqrt_ratio_a_x96
+
+        return self.mul_div(liquidity, sqrt_ratio_b_x96 - sqrt_ratio_a_x96, self.Q96)
+
+    def print_debug_info(self, amount0, amount1, current_tick, lower_tick, upper_tick):
+        sqrt_ratio_x96 = self.get_sqrt_ratio_at_tick(current_tick)
+        sqrt_ratio_a_x96 = self.get_sqrt_ratio_at_tick(lower_tick)
+        sqrt_ratio_b_x96 = self.get_sqrt_ratio_at_tick(upper_tick)
+
+        print(f"sqrt_ratio_x96: {sqrt_ratio_x96}")
+        print(f"sqrt_ratio_a_x96: {sqrt_ratio_a_x96}")
+        print(f"sqrt_ratio_b_x96: {sqrt_ratio_b_x96}")
+        print(f"amount0 (scaled): {amount0 * Decimal(10**self.pool.decimals0)}")
+        print(f"amount1 (scaled): {amount1 * Decimal(10**self.pool.decimals1)}")

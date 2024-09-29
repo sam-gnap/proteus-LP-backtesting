@@ -1,5 +1,6 @@
-from decimal import Decimal
+from decimal import Decimal, getcontext
 import numpy as np
+from math import sqrt
 
 
 class Pool:
@@ -22,7 +23,29 @@ class Pool:
         self.tick_spacing = self.fee_tier_to_tick_spacing()
         self.TICK_BASE = Decimal("1.0001")
         self.sqrt_price_x96 = sqrt_price_x96
-        self.sqrt_price, self.price = self.sqrtPriceX96_to_price()
+        self.q96 = 2**96
+        getcontext().prec = 50
+
+    def price_to_sqrt_price_x96(
+        self, price: float, token0_decimals: int, token1_decimals: int
+    ) -> int:
+        """
+        Convert a price (token1/token0) to sqrtPriceX96 format with high precision
+        """
+        price_adjusted = price * (10 ** (token0_decimals - token1_decimals))
+        return int(np.sqrt(price_adjusted) * (2**96))
+
+    def sqrt_price_x96_to_price(
+        self, sqrt_price_x96: int, token0_decimals: int, token1_decimals: int
+    ) -> float:
+        """
+        Convert a sqrtPriceX96 to price (token1/token0)
+        """
+        price = (sqrt_price_x96 / self.q96) ** 2
+        return price / (10 ** (token1_decimals - token0_decimals))
+
+    def price_to_sqrtp(self, p):
+        return int(np.sqrt(p) * self.q96)
 
     def tick_to_price(self, tick: int) -> Decimal:
         return self.TICK_BASE**tick
@@ -44,9 +67,3 @@ class Pool:
 
     def fee_tier_to_tick_spacing(self):
         return {100: 1, 500: 10, 3000: 60, 10000: 200}.get(self.fee_tier, 60)
-
-    def sqrtPriceX96_to_price(self):
-        sqrt_price = Decimal(self.sqrt_price_x96) / Decimal(2**96)
-        price = int(sqrt_price**2)
-        price = price * Decimal(10 ** (self.decimals0 - self.decimals1))
-        return sqrt_price, price
