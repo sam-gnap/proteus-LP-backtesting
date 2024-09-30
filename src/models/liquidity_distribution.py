@@ -320,7 +320,7 @@ class LiquidityPeriphery:
         if tick > 0:
             ratio = (2**256 - 1) // ratio
 
-        return int((ratio >> 32) + (1 if ratio % (1 << 32) else 0))
+        return int((ratio >> 32) + (0 if ratio % (1 << 32) == 0 else 1))
 
     def price_to_tick(self, price: float, token0_decimals: int, token1_decimals: int) -> int:
         decimals_adjustment = 10 ** (token0_decimals - token1_decimals)

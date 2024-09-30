@@ -26,6 +26,9 @@ class Pool:
         self.q96 = 2**96
         getcontext().prec = 50
 
+    def to_wei(self, amount, decimals) -> int:
+        return int(amount * 10**decimals)
+
     def price_to_sqrt_price_x96(
         self, price: float, token0_decimals: int, token1_decimals: int
     ) -> int:
