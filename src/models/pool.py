@@ -60,6 +60,8 @@ class Pool:
         return round(tick)
 
     def adjust_price(self, price: Decimal) -> Decimal:
+        if self.should_invert_price(price):
+            return 1 / (price / Decimal(10 ** (self.decimals1 - self.decimals0)))
         return price / Decimal(10 ** (self.decimals1 - self.decimals0))
 
     def should_invert_price(self, current_price: Decimal) -> bool:
